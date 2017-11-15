@@ -21,7 +21,7 @@ roads.clean.location <- paste0(pkg.data.location, 'clean/roads.rds')
 
 # Background
 
-This is a 'proof of concept' exercise that will attempt the predict road saftey using the Google streetview api and a retrained (transfer learning based) version of Tensorflow to enable mass prediction of roads on large datasets. The ultimate output would be a heat map/scoring of predicted road saftey across Alabama. 
+This is a 'proof of concept' exercise that will attempt the predict road safety using the Google streetview api and a retrained (transfer learning based) version of Tensorflow to enable mass prediction of road safety on large datasets. The ultimate output would be a heat map/scoring of predicted road saftey across Alabama. 
 
 
 ##  Take streetview photos
@@ -69,3 +69,14 @@ sample.line <- function(x, sdist=100){
 }
 road.lines <- sample.line(roads, sdist=0.001)
 ```
+
+### Pano_ids from meta data
+
+
+### Pano_ids and camera direction
+
+
+### Snap street view picture
+
+
+### Tensorflow
