@@ -1,0 +1,59 @@
+---
+title: "Alabama Roads Project"
+authors: "Alexander Hainen and Erik Johnson"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rgdal)
+library(streetview)
+library(api.keys)
+library(ggplot2)
+library(geosphere)
+library(rgeos)
+proj.env <- '+proj=tmerc +lat_0=30 +lon_0=-87.5 +k=0.999933333 +x_0=600000 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs'
+pkg.data.location <- '~/Dropbox/pkg.data/alabama_roads/'
+roads.raw.location <- paste0(pkg.data.location, 'raw/us82erik/us82_dissolve')
+roads.clean.location <- paste0(pkg.data.location, 'clean/roads.rds')
+```
+
+# Background
+
+This is a 'proof of concept' exercise that will attempt the predict road saftey using the Google streetview api and a retrained (transfer learning based) version of Tensorflow to enable mass prediction of roads on large datasets. The ultimate output would be a heat map/scoring of predicted road saftey across Alabama. 
+
+## Dependencies
+
+The outline of the process is as follows:
+
+1) Take streetview photos
+
+To do this we will use the road shapefile in the raw project data folder `r roads.location`. If you do not currently have access to the folder, you can download the folder by going to ![DropboxWebLink][https://www.dropbox.com/sh/b7hkvg1xn4nvf87/AADjCfnu1eltuUKyX5HTWvl7a?dl=1]. Ideally, you should be able to dynamically link locally by using Dropbox desktop...
+
+To build the streetview folders, the first step is to discretize the road shapefile and then use the google streetview metadata api to get locations of nearest google streetview picture (henceforth called pano_id). In this case the picture will be manually tuned to have the car driving in the 'correct' direction. In the future, this can easily be done with tensorflow as well, by simply ensuring that the photo taken is on the right (not the left) side of the road. Again, this can be easily automated in tensorflow in the future for bigger data applications.
+
+
+```{r roads_import}
+if(!(file.exists(roads.clean.location))){
+  roads <- rgdal::readOGR(dsn = path.expand(roads.raw.location), layer = 'us82d', verbose = FALSE)
+  roads <- sp::spTransform(roads, proj4string=CRS(proj.env))
+  saveRDS(roads, file = roads.clean.location)
+} else {
+  roads <- readRDS(roads.clean.location)
+}
+# Plot
+map.center <- geosphere::centroid(rgeos::gBuffer(roads, width=0.1))
+roads_fortify <- ggplot2::fortify(roads)
+ggplot(roads_fortify, aes(x=long, y=lat, group=group)) +
+  geom_line()
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
