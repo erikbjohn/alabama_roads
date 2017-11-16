@@ -5,7 +5,9 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
+library(knitr)
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=45),tidy=TRUE)
 library(rgdal)
 library(streetview) # devtools::install_github('erikbjohn/streetview')
 library(api.keys) # devtools::install_github('erikbjohn/api.keys')
@@ -14,7 +16,6 @@ library(geosphere)
 library(rgeos)
 library(ggmap)
 library(kableExtra)
-library(knitr)
 library(data.table)
 
 # Set location for local package data storage
@@ -67,8 +68,8 @@ p <- ggmap(map)  +
 print(p)
 ```
 
-### Roads Discretize
-This discretizes the roads into points creates the points to find the panoids. 
+### Roads Discretize to points
+This discretizes the roads into points creates the points to find the panoids. The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id.
 
 ```{r road.points}
 if (!(file.exists(road.points.location))){
@@ -84,23 +85,34 @@ knitr::kable(head(road.points@data))
 
 ### Pano_ids and meta data
 
-The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id. This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled.
+### Points to panoids
 
-```{r dt_pano_ids, eval=FALSE}
+This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
+
+```{r dt_pano_ids}
 if (!(file.exists(panoids.location))){
   points.ids.full <- road.points$ID
   points.files <- list.files(road.points.panoid.location)
-  points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x, stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
+  points.ids.done <- sapply(points.files,
+                            function(x) stringr::str_extract(x,
+                                                             stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
   points.ids.not.done <- points.ids.full[!(points.ids.full %in% points.ids.done)]
   
   while(length(points.ids.not.done)>0){
-    points.ids <- sample(points.ids.not.done, 10)
-    cat('Assigning', length(points.ids), 'points to panoids.', length(points.ids.not.done), 'remain \n')
-    l.panoids <- lapply(points.ids, function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
+    if (length(points.ids.not.done)>1){
+      points.ids <- sample(points.ids.not.done, 10)
+    } else {
+      points.ids <- points.ids.not.done
+    }
+    cat('Assigning', length(points.ids), 'points to panoids.',
+        length(points.ids.not.done), 'remain \n')
+    l.panoids <- lapply(points.ids,
+                        function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
                                                                     api_key=api.key,
                                                                     save.location = road.points.panoid.location))
     points.files <- list.files(road.points.panoid.location)
-    points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x, stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
+    points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x,
+                                                                             stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
     points.ids.not.done <- points.ids.full[!(points.ids.full %in% points.ids.done)]
   }
   
@@ -111,16 +123,35 @@ if (!(file.exists(panoids.location))){
     f.to.load <- files.to.load[iLoad]
     f <- readRDS(f.to.load)
     l.file <- list(dt.file, f)
-    dt.file <- rbindlist(l.file, use.names=TRUE, fill=TRUE)
+    dt.file <- rbindlFist(l.file, use.names=TRUE, fill=TRUE)
   }
   dt_pano_ids <- dt.file
+  # Unique record for each pano Id and retain order from roads.point
+  dt_pano_ids$roads.point.id <- as.integer(dt_pano_ids$roads.point.id)
+  setkey(dt_pano_ids, roads.point.id)
+  # Find unique panoids
+  dt_pano_ids[, pano_id_order := .GRP, by = pano_id]
+  dt_pano_ids <- unique(dt_pano_ids[, .(date, location.lat, location.lng, pano_id, pano_id_order, status)])
+  dt_pano_ids$location.lng <- as.numeric(dt_pano_ids$location.lng)
+  dt_pano_ids$location.lat <- as.numeric(dt_pano_ids$location.lat)
+  setkey(dt_pano_ids, pano_id_order)
+  # Get bearings for pictures (ahead and behind) (Simply aim at panoids in front and behind.)
+  dt_pano_ids$lat.lead <- data.table::shift(dt_pano_ids$location.lat, 1, type='lead')
+  dt_pano_ids$lng.lead <- data.table::shift(dt_pano_ids$location.lng, 1, type='lead')
+  dt_pano_ids$lat.lag <- data.table::shift(dt_pano_ids$location.lat, 1, type='lag')
+  dt_pano_ids$lng.lag <- data.table::shift(dt_pano_ids$location.lng, 1, type='lag')
+  dt_pano_ids <- na.omit(dt_pano_ids)
+  dt_pano_ids$bearings.lead <- sapply(1:nrow(dt_pano_ids), function(x) geosphere::bearing(c(dt_pano_ids[x,location.lng], dt_pano_ids[x,location.lat]),
+                                                                          c(dt_pano_ids[x,lng.lead], dt_pano_ids[x,lat.lead])))
+  dt_pano_ids$bearings.lag <- sapply(1:nrow(dt_pano_ids), function(x) geosphere::bearing(c(dt_pano_ids[x,location.lng], dt_pano_ids[x,location.lat]),
+                                                                          c(dt_pano_ids[x,lng.lag], dt_pano_ids[x,lat.lag])))
   saveRDS(dt_pano_ids, file=panoids.location)
 } else {
   dt_pano_ids <- readRDS(panoids.location)
 }
+knitr::kable(head(dt_pano_ids[,.(date, pano_id, pano_order=pano_id_order, lat=location.lat, lng=location.lng, bear.lead=bearings.lead, bear.lag=bearings.lag)]))
 ```
-### Pano_ids and camera direction
-
+There are `r nrow(dt_pano_ids)` in this data set.
 
 ### Snap street view picture
 
