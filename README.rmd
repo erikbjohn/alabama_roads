@@ -83,9 +83,7 @@ saveRDS(road.points, file=road.points.location)
 knitr::kable(head(road.points@data))
 ```
 
-### Pano_ids and meta data
-
-### Points to panoids
+### Points to panoids and camera bearings
 
 This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
 
@@ -151,7 +149,8 @@ if (!(file.exists(panoids.location))){
 }
 knitr::kable(head(dt_pano_ids[,.(date, pano_id, pano_order=pano_id_order, lat=location.lat, lng=location.lng, bear.lead=bearings.lead, bear.lag=bearings.lag)]))
 ```
-There are `r nrow(dt_pano_ids)` in this data set.
+
+There are `r nrow(dt_pano_ids)` observations in the **dt_pano_ids** dataset.
 
 ### Snap street view picture
 
