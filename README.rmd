@@ -13,23 +13,39 @@ library(ggplot2)
 library(geosphere)
 library(rgeos)
 library(ggmap)
-proj.env <- '+proj=longlat +datum=WGS84'
+library(kableExtra)
+library(knitr)
+library(data.table)
+
+# Set location for local package data storage
 pkg.data.location <- '~/Dropbox/pkg.data/alabama_roads/'
+
+## Api Key load
+api.key.location <- '~/Dropbox/pkg.data/api.keys/raw/l.pkg.rdata'
+load(api.key.location)
+api.key <- l.pkg$google
+
+## Auto set paths
+source('R/sample.line.R')
+source('R/streetview.metadata.R')
+proj.env <- '+proj=longlat +datum=WGS84'
+panoids.location <- paste0(pkg.data.location, 'clean/pano_ids.rds')
 roads.raw.location <- paste0(pkg.data.location, 'raw/us82erik/us82_dissolve')
 roads.clean.location <- paste0(pkg.data.location, 'clean/roads.rds')
+road.points.location <- paste0(pkg.data.location, 'clean/roads.lines.rds')
+road.points.panoid.location <- paste0(pkg.data.location, 'raw/road.points.panoids/')
 ```
 
 # Background
 
 This is a 'proof of concept' exercise that will attempt the predict road safety using the Google streetview api and a retrained (transfer learning based) version of Tensorflow to enable mass prediction of road safety on large datasets. The ultimate output would be a heat map/scoring of predicted road saftey across Alabama. 
 
-
 ##  Take streetview photos
 
 ### Import roads
 
 To do this we will use the road shapefile in the raw project data folder \newline
-`r roads.raw.location`. If you do not currently have access to the folder, you can download the folder by going to this [Dropbox web link](https://www.dropbox.com/sh/b7hkvg1xn4nvf87/AADjCfnu1eltuUKyX5HTWvl7a?dl=1). Ideally, you should be able to dynamically link locally by using Dropbox desktop...
+`r roads.raw.location`. If you do not currently have access to the folder, you can download the folder by going to this [Dropbox web link](https://www.dropbox.com/sh/b7hkvg1xn4nvf87/AADjCfnu1eltuUKyX5HTWvl7a?dl=1). Ideally, you should be able to dynamically link locally by using Dropbox desktop...r
 
 To build the streetview folders, the first step is to discretize the road shapefile and then use the google streetview metadata api to get locations of nearest google streetview picture (henceforth called pano_id). In this case the picture will be manually tuned to have the car driving in the 'correct' direction. In the future, this can easily be done with tensorflow as well, by simply ensuring that the photo taken is on the right (not the left) side of the road. Again, this can be easily automated in tensorflow in the future for bigger data applications.
 
@@ -38,7 +54,6 @@ To build the streetview folders, the first step is to discretize the road shapef
 if(!(file.exists(roads.clean.location))){
   roads <- rgdal::readOGR(dsn = path.expand(roads.raw.location), layer = 'us82d', verbose = FALSE)
   roads <- sp::spTransform(roads, CRSobj =CRS(proj.env))
-  
   saveRDS(roads, file = roads.clean.location)
 } else {
   roads <- readRDS(roads.clean.location)
@@ -53,26 +68,57 @@ print(p)
 ```
 
 ### Roads Discretize
+This discretizes the roads into points creates the points to find the panoids. 
 
-This creates the points to find the panoids
-
-```{r roads_discretize}
-sample.line <- function(x, sdist=100){
-    if (!require(sp)) stop("sp PACKAGE MISSING")
-     if (!inherits(x, "SpatialLinesDataFrame")) stop("MUST BE SP SpatialLinesDataFrame OBJECT")
-      lgth <- SpatialLinesLengths(x) 
-      lsub <- x[1,]
-        ns <- round( (lgth[1] / sdist), digits=0)
-          lsamp <- spsample(lsub, n=ns, type="regular", offset=c(0.5,0.5))
-          results <- SpatialPointsDataFrame(lsamp, data=data.frame(ID=rep(1:length(lsamp)))) 
-  ( results )
+```{r road.points}
+if (!(file.exists(road.points.location))){
+road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))
+road.points$long <- road.points@coords[,1]
+road.points$lat <- road.points@coords[,2]
+saveRDS(road.points, file=road.points.location)
+} else {
+  road.points <- readRDS(road.points.location)
 }
-road.lines <- sample.line(roads, sdist=0.001)
+knitr::kable(head(road.points@data))
 ```
 
-### Pano_ids from meta data
+### Pano_ids and meta data
 
+The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id. This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled.
 
+```{r dt_pano_ids, eval=FALSE}
+if (!(file.exists(panoids.location))){
+  points.ids.full <- road.points$ID
+  points.files <- list.files(road.points.panoid.location)
+  points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x, stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
+  points.ids.not.done <- points.ids.full[!(points.ids.full %in% points.ids.done)]
+  
+  while(length(points.ids.not.done)>0){
+    points.ids <- sample(points.ids.not.done, 10)
+    cat('Assigning', length(points.ids), 'points to panoids.', length(points.ids.not.done), 'remain \n')
+    l.panoids <- lapply(points.ids, function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
+                                                                    api_key=api.key,
+                                                                    save.location = road.points.panoid.location))
+    points.files <- list.files(road.points.panoid.location)
+    points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x, stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
+    points.ids.not.done <- points.ids.full[!(points.ids.full %in% points.ids.done)]
+  }
+  
+  # Combine all ponoids into a data.table
+  files.to.load <- points.files <- list.files(road.points.panoid.location, full.names = TRUE)
+  dt.file <- readRDS(files.to.load[1])
+  for(iLoad in 2:length(files.to.load)){
+    f.to.load <- files.to.load[iLoad]
+    f <- readRDS(f.to.load)
+    l.file <- list(dt.file, f)
+    dt.file <- rbindlist(l.file, use.names=TRUE, fill=TRUE)
+  }
+  dt_pano_ids <- dt.file
+  saveRDS(dt_pano_ids, file=panoids.location)
+} else {
+  dt_pano_ids <- readRDS(panoids.location)
+}
+```
 ### Pano_ids and camera direction
 
 
@@ -80,3 +126,29 @@ road.lines <- sample.line(roads, sdist=0.001)
 
 
 ### Tensorflow
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
