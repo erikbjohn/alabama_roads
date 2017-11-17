@@ -4,7 +4,7 @@ authors: "Alexander Hainen and Erik Johnson"
 output: pdf_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, echo=FALSE}
 library(knitr)
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(tidy.opts=list(width.cutoff=45),tidy=TRUE)
@@ -35,13 +35,14 @@ roads.raw.location <- paste0(pkg.data.location, 'raw/us82erik/us82_dissolve')
 roads.clean.location <- paste0(pkg.data.location, 'clean/roads.rds')
 road.points.location <- paste0(pkg.data.location, 'clean/roads.lines.rds')
 road.points.panoid.location <- paste0(pkg.data.location, 'raw/road.points.panoids/')
+snapshots.location <- paste0(pkg.data.location, 'raw/snapshots/')
 ```
 
 # Background
 
 This is a 'proof of concept' exercise that will attempt the predict road safety using the Google streetview api and a retrained (transfer learning based) version of Tensorflow to enable mass prediction of road safety on large datasets. The ultimate output would be a heat map/scoring of predicted road saftey across Alabama. 
 
-##  Take streetview photos
+##  Step 1: Take streetview photos
 
 ### Import roads
 
@@ -68,12 +69,12 @@ p <- ggmap(map)  +
 print(p)
 ```
 
-### Roads Discretize to points
+### Discretize roads to points
 This discretizes the roads into points creates the points to find the panoids. The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id.
 
 ```{r road.points}
 if (!(file.exists(road.points.location))){
-road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))
+road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))##
 road.points$long <- road.points@coords[,1]
 road.points$lat <- road.points@coords[,2]
 saveRDS(road.points, file=road.points.location)
@@ -83,7 +84,7 @@ saveRDS(road.points, file=road.points.location)
 knitr::kable(head(road.points@data))
 ```
 
-### Points to panoids and camera bearings
+### Points to panoids with camera bearings
 
 This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
 
@@ -152,10 +153,44 @@ knitr::kable(head(dt_pano_ids[,.(date, pano_id, pano_order=pano_id_order, lat=lo
 
 There are `r nrow(dt_pano_ids)` observations in the **dt_pano_ids** dataset.
 
-### Snap street view picture
+## Step 2: Streetview Snapshots
 
+```{r snapshot, out.width = "50%"}
+pano_samples <- sample(nrow(dt_pano_ids),size = nrow(dt_pano_ids), replace = FALSE)
 
-### Tensorflow
+for (iSample in pano_samples){
+  dt_pano_id <- dt_pano_ids[iSample,]
+  
+  fDest.lead <- paste0(snapshots.location, 'pano_id:', dt_pano_id$pano_id, '_lead.jpg')
+  fDest.lag <- paste0(snapshots.location, 'pano_id:', dt_pano_id$pano_id, '_lag.jpg')
+  g.lat <- dt_pano_id$location.lat
+  g.lng <- dt_pano_id$location.lng
+  g.bearings <- unlist(dt_pano_id[, .(bearings.lead, bearings.lag)])
+  
+  api <- list()
+  api$head <- 'https://maps.googleapis.com/maps/api/streetview?size=600x400' 
+  api$location <- paste0('&location=', g.lat, ',', g.lng)
+  api$fov <- paste0('&fov=', 30)
+  api$heading <- paste0('&heading=', g.bearings[1])
+  api$pitch <- paste0('&pitch=', 0)
+  api$api.key <- paste0('&key=',api.key)
+  api.url <- paste0(unlist(api), collapse = '')
+  if (!(file.exists(fDest.lead))){
+    streetShot <- download.file(api.url, fDest.lead, quiet=TRUE) 
+  }
+  api$heading <- paste0('&heading=', g.bearings[2])
+  api.url <- paste0(unlist(api), collapse = '')
+  if (!(file.exists(fDest.lag))){
+    streetShot <- download.file(api.url, fDest.lag, quiet = TRUE)
+  }
+}
+snap.list <- list.files(path = snapshots.location, full.names = TRUE)
+snap.samp <- sample(snap.list, 10)
+knitr::include_graphics(snap.samp[1])
+knitr::include_graphics(snap.samp[2])
+```
+
+# Tensorflow
 
 
 
