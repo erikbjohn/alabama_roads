@@ -52,7 +52,7 @@ To do this we will use the road shapefile in the raw project data folder \newlin
 To build the streetview folders, the first step is to discretize the road shapefile and then use the google streetview metadata api to get locations of nearest google streetview picture (henceforth called pano_id). In this case the picture will be manually tuned to have the car driving in the 'correct' direction. In the future, this can easily be done with tensorflow as well, by simply ensuring that the photo taken is on the right (not the left) side of the road. Again, this can be easily automated in tensorflow in the future for bigger data applications.
 
 
-```{r roads_import}
+```{r roads_import, eval=TRUE}
 if(!(file.exists(roads.clean.location))){
   roads <- rgdal::readOGR(dsn = path.expand(roads.raw.location), layer = 'us82d', verbose = FALSE)
   roads <- sp::spTransform(roads, CRSobj =CRS(proj.env))
@@ -72,7 +72,7 @@ print(p)
 ### Discretize roads to points
 This discretizes the roads into points creates the points to find the panoids. The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id.
 
-```{r road.points}
+```{r road.points, eval=TRUE}
 if (!(file.exists(road.points.location))){
 road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))##
 road.points$long <- road.points@coords[,1]
@@ -88,7 +88,7 @@ knitr::kable(head(road.points@data))
 
 This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
 
-```{r dt_pano_ids}
+```{r dt_pano_ids, eval=TRUE}
 if (!(file.exists(panoids.location))){
   points.ids.full <- road.points$ID
   points.files <- list.files(road.points.panoid.location)
@@ -107,7 +107,7 @@ if (!(file.exists(panoids.location))){
         length(points.ids.not.done), 'remain \n')
     l.panoids <- lapply(points.ids,
                         function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
-                                                                    api_key=api.key,
+                                 S                                   api_key=api.key,
                                                                     save.location = road.points.panoid.location))
     points.files <- list.files(road.points.panoid.location)
     points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x,
@@ -155,10 +155,11 @@ There are `r nrow(dt_pano_ids)` observations in the **dt_pano_ids** dataset.
 
 ## Step 2: Streetview Snapshots
 
-```{r snapshot, out.width = "50%"}
+```{r snapshot, eval=FALSE, echo=TRUE, out.width = "50%"}
 pano_samples <- sample(nrow(dt_pano_ids),size = nrow(dt_pano_ids), replace = FALSE)
 
 for (iSample in pano_samples){
+  if((iSample %% 100)==0) cat(iSample, '\\n')
   dt_pano_id <- dt_pano_ids[iSample,]
   
   fDest.lead <- paste0(snapshots.location, 'pano_id:', dt_pano_id$pano_id, '_lead.jpg')
@@ -192,14 +193,116 @@ knitr::include_graphics(snap.samp[2])
 
 # Tensorflow
 
+For transfer learning example, see [https://www.tensorflow.org/tutorials/image_retraining](https://www.tensorflow.org/tutorials/image_retraining)
+
+## Transfer learning
+
+Traning data must have unique filenames.
+
+```{r clean_names,eval=FALSE,echo=TRUE}
+training_dirs <- c('guardrail', 'rumble', 'signals')
+for (training_dir in training_dirs){
+
+filez <- list.files(paste0('~/Dropbox/pkg.data/alabama_roads/raw/training_data/' training_dir), full.names = TRUE)
+sapply(filez,FUN=function(eachPath){
+      file.rename(from=eachPath,to=stringr::str_replace(eachPath, pattern = '\\.jpg', replacement = paste0(training_dir, '.jpg'))
+})
+}
+```
+
+Now actually compile and train tensorflow.
+
+```{r, eval=FALSE, echo=TRUE}
+cd ~/tensorflow
+# First build inception for retraining (estimated time ~25 minutes on Linux box)
+# Do not need to run this more than once on the box.
+bazel build --config opt tensorflow/examples/image_retraining:retrain
+
+# retrain/transfer learning on roads data (~5-10 minutes)
+# need to rerun this if want to retrain.
+bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir /home/ebjohnson5/pkg.data/alabama_roads/raw/training_data
+# To visualize training output in tensorboard
+tensorboard --logdir /tmp/retrain_logs
+```
+
+## Classification
+
+This is the main bottleneck in the process right now.
+This can be parallelized in python using tensorflow/serving [https://github.com/tensorflow/serving](tensorflow serving). For now, this works but takes awhile.
 
 
 
+```{r Classification, eval=TRUE, echo=TRUE}
+  project_location <- '~/Dropbox/pkg.data/alabama_roads/'
+  classify.name <- 'roads_example1'
+  f.dir <- paste0(project_location, 'raw/snapshots/')
+  f.list.path <- list.files(f.dir, full.names = TRUE)
+  f.list <- list.files(f.dir)
+  
+  dt.classify.location <- paste0(project_location, 'clean/dt.classify.', classify.name, '.rds')
+  if(file.exists(dt.classify.location)){
+    dt.classify <- readRDS(dt.classify.location)
+    files.complete <- unique(dt.classify$fName)
+  } else {
+    files.complete <- ''
+  }
+  f.to.do <- data.table(f.name = f.list[which(!(f.list %in% files.complete))], f.path =f.list.path[which(!(f.list %in% files.complete))])
+  
+  labels.location <- '/tmp/output_labels.txt'
+  graph.location  <- '/tmp/output_graph.pb'
+  
+  # Tensor head string 
+  str.head <- 'source ~/tensorflow/bin/activate & ~/tensorflow/bazel-bin/tensorflow/examples/image_retraining/label_image'
+  str.graph <- paste0('--graph=', graph.location)
+  str.label <- paste0('--labels=', labels.location)
+  str.tail <- '--output_layer=final_result:0 --image='
+  str.block <- paste(str.head, str.graph, str.label, str.tail)
+  randomPics <- sample(nrow(f.to.do), nrow(f.to.do), replace = FALSE)
+  i <- 0
+  for (pic in randomPics){
+    i <- i + 1; cat(i, 'of', nrow(f.to.do), '\n')
+    f.name <- f.to.do$f.name[pic]
+    f.path <- f.to.do$f.path[pic]
+    pano_id <- stringr::str_extract(f.name, stringr::regex('(?<=pano\\_id\\:).+(?=.+\\.jpg)'))
+    type <- stringr::str_extract(f.name, stringr::regex('(?<=\\_)(lag|lead)(?=\\.jpg)'))
+    classes <- system(paste0(str.block, f.path), intern=TRUE)
+    l.classes <- sapply(classes, function(x) stringr::str_split(x, ' \\(score = '), simplify=TRUE)
+    l.classes.dt <- lapply(l.classes, function(x) data.table::data.table(pano_id = pano_id, type =type, fName = f.name, category = x[1], score = x[2]))
+    dt.classes.new <- rbindlist(l.classes.dt, use.names = TRUE, fill = TRUE)
+    dt.classes.new <- dt.classes.new[category=='parks usage', category:='parks_usage']
+    dt.classes.new$score <- as.numeric(stringr::str_replace_all(dt.classes.new$score, '\\)$', ''))
+    knitr::kable(dt.classes.new)
+    cat('\n')
+    if(file.exists(dt.classify.location)){
+      dt.classify <- rbindlist(list(dt.classify, dt.classes.new), use.names = TRUE)
+      saveRDS(dt.classify, dt.classify.location)
+    } else {
+      saveRDS(dt.classes.new, dt.classify.location)
+      dt.classify <- dt.classes.new
+    }
+  }
+  dt.classify <- unique(dt.classify[, .(pano_id, type, fName, category, score)])
 
+```
 
+```{r, eval=FALSE, echo=TRUE}
+# Guardrail example
+bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r2NkANifYabJWFCEi2CXUQ_lag.jpg
 
+bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0ExJrw5e5qPwp7qcTU9rg_lag.jpg
 
+# Need to add to training
+bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0fW5VldKtkNNetToCeLGQ_lag.jpg
 
+# Traffic signal
+bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lead.jpg
+
+# Null 
+bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lag.jpg
+```
+```{r, eval=FALSE, echo=TRUE}
+
+```
 
 
 
