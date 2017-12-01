@@ -48,4 +48,5 @@ classification <- function(){
     }
   }
   dt.classify <- unique(dt.classify[, .(pano_id, type, fName, category, score)])
+  return(dt.classify)
 }
