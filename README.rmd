@@ -53,7 +53,7 @@ To do this we will use the road shapefile in the raw project data folder \newlin
 To build the streetview folders, the first step is to discretize the road shapefile and then use the google streetview metadata api to get locations of nearest google streetview picture (henceforth called pano_id). In this case the picture will be manually tuned to have the car driving in the 'correct' direction. In the future, this can easily be done with tensorflow as well, by simply ensuring that the photo taken is on the right (not the left) side of the road. Again, this can be easily automated in tensorflow in the future for bigger data applications.
 
 
-```{r roads_import, eval=TRUE}
+```{r roads_import, eval=TRUE, cache=TRUE}
 if(!(file.exists(roads.clean.location))){
   roads <- rgdal::readOGR(dsn = path.expand(roads.raw.location), layer = 'us82d', verbose = FALSE)
   roads <- sp::spTransform(roads, CRSobj =CRS(proj.env))
@@ -73,7 +73,7 @@ print(p)
 ### Discretize roads to points
 This discretizes the roads into points creates the points to find the panoids. The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id.
 
-```{r road.points, eval=TRUE}
+```{r road.points, eval=TRUE, cache=TRUE}
 if (!(file.exists(road.points.location))){
 road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))##
 road.points$long <- road.points@coords[,1]
@@ -86,10 +86,8 @@ knitr::kable(head(road.points@data))
 ```
 
 ### Points to panoids with camera bearings
-
-This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
-
-```{r dt_pano_ids, eval=TRUE}
+ 
+```{r dt_pano_ids, eval=TRUE, cache=TRUE}
 if (!(file.exists(panoids.location))){
   points.ids.full <- road.points$ID
   points.files <- list.files(road.points.panoid.location)
@@ -106,10 +104,10 @@ if (!(file.exists(panoids.location))){
     }
     cat('Assigning', length(points.ids), 'points to panoids.',
         length(points.ids.not.done), 'remain \n')
-    l.panoids <- lapply(points.ids,
-                        function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
-                                 S                                   api_key=api.key,
+    l.panoids <- lapply(points.ids, function(x) streetview.metadata(data.table::as.data.table(road.points@data[which(road.points@data$ID == x),]),
+                                                                    api_key=api.key,
                                                                     save.location = road.points.panoid.location))
+    
     points.files <- list.files(road.points.panoid.location)
     points.ids.done <- sapply(points.files, function(x) stringr::str_extract(x,
                                                                              stringr::regex('(?<=id\\:).+(?=\\;)', perl=TRUE)))
@@ -152,6 +150,8 @@ if (!(file.exists(panoids.location))){
 knitr::kable(head(dt_pano_ids[,.(date, pano_id, pano_order=pano_id_order, lat=location.lat, lng=location.lng, bear.lead=bearings.lead, bear.lag=bearings.lag)]))
 ```
 
+This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids$pano_id_order**.
+
 There are `r nrow(dt_pano_ids)` observations in the **dt_pano_ids** dataset.
 
 ## Step 2: Streetview Snapshots
@@ -192,11 +192,11 @@ knitr::include_graphics(snap.samp[1])
 knitr::include_graphics(snap.samp[2])
 ```
 
-# Tensorflow
 
-For transfer learning example, see [https://www.tensorflow.org/tutorials/image_retraining](https://www.tensorflow.org/tutorials/image_retraining)
+## Step 3: Human classification to use for machine training
 
-## Transfer learning
+
+## Step 4: Machine Training
 
 Traning data must have unique filenames.
 
@@ -226,36 +226,35 @@ bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir /home/ebjohns
 tensorboard --logdir /tmp/retrain_logs
 ```
 
-## Classification
+## Step 5: Machine Classification
 
 This is the main bottleneck in the process right now.
 This can be parallelized in python using tensorflow/serving [https://github.com/tensorflow/serving](tensorflow serving). For now, this works but takes awhile.
 
-
-
-```{r Classification, eval=TRUE, echo=TRUE}
+```{r Classification, eval=FALSE, echo=TRUE}
 tf_classify <- tf_classification()
 ```
 
 ```{r, eval=FALSE, echo=TRUE}
 # Guardrail example
-bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r2NkANifYabJWFCEi2CXUQ_lag.jpg
+#bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r2NkANifYabJWFCEi2CXUQ_lag.jpg
 
-bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0ExJrw5e5qPwp7qcTU9rg_lag.jpg
+#bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0ExJrw5e5qPwp7qcTU9rg_lag.jpg
 
 # Need to add to training
-bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0fW5VldKtkNNetToCeLGQ_lag.jpg
+#bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r0fW5VldKtkNNetToCeLGQ_lag.jpg
 
 # Traffic signal
-bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lead.jpg
+#bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lead.jpg
 
 # Null 
-bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lag.jpg
-```
-```{r, eval=FALSE, echo=TRUE}
-
+#bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lag.jpg
 ```
 
+### Step 6: Output visualization 
+
+
+This is where the QGis component goes.
 
 
 

@@ -1,4 +1,4 @@
-classification <- function(){
+tf_classification <- function(){
   project_location <- '~/Dropbox/pkg.data/alabama_roads/'
   classify.name <- 'roads_example1'
   f.dir <- paste0(project_location, 'raw/snapshots/')
