@@ -220,7 +220,7 @@ bazel build --config opt tensorflow/examples/image_retraining:retrain
 
 # retrain/transfer learning on roads data (~5-10 minutes)
 # need to rerun this if want to retrain.
-bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir /home/ebjohnson5/pkg.data/alabama_roads/raw/training_data
+bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir /home/ebjohnson5/Dropbox/pkg.data/alabama_roads/raw/training_data
 # To visualize training output in tensorboard
 tensorboard --logdir /tmp/retrain_logs
 ```
@@ -246,7 +246,7 @@ This can be parallelized in python using tensorflow/serving [https://github.com/
   } else {
     files.complete <- ''
   }
-  f.to.do <- data.table(f.name = f.list[which(!(f.list %in% files.complete))], f.path =f.list.path[which(!(f.list %in% files.complete))])
+  f.to.do <- data.table::data.table(f.name = f.list[which(!(f.list %in% files.complete))], f.path =f.list.path[which(!(f.list %in% files.complete))])
   
   labels.location <- '/tmp/output_labels.txt'
   graph.location  <- '/tmp/output_graph.pb'
@@ -268,13 +268,13 @@ This can be parallelized in python using tensorflow/serving [https://github.com/
     classes <- system(paste0(str.block, f.path), intern=TRUE)
     l.classes <- sapply(classes, function(x) stringr::str_split(x, ' \\(score = '), simplify=TRUE)
     l.classes.dt <- lapply(l.classes, function(x) data.table::data.table(pano_id = pano_id, type =type, fName = f.name, category = x[1], score = x[2]))
-    dt.classes.new <- rbindlist(l.classes.dt, use.names = TRUE, fill = TRUE)
+    dt.classes.new <- data.table::rbindlist(l.classes.dt, use.names = TRUE, fill = TRUE)
     dt.classes.new <- dt.classes.new[category=='parks usage', category:='parks_usage']
     dt.classes.new$score <- as.numeric(stringr::str_replace_all(dt.classes.new$score, '\\)$', ''))
     knitr::kable(dt.classes.new)
     cat('\n')
     if(file.exists(dt.classify.location)){
-      dt.classify <- rbindlist(list(dt.classify, dt.classes.new), use.names = TRUE)
+      dt.classify <- data.table::rbindlist(list(dt.classify, dt.classes.new), use.names = TRUE)
       saveRDS(dt.classify, dt.classify.location)
     } else {
       saveRDS(dt.classes.new, dt.classify.location)
