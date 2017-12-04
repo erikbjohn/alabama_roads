@@ -29,7 +29,8 @@ tf_classification <- function(){
     i <- i + 1; cat(i, 'of', nrow(f.to.do), '\n')
     f.name <- f.to.do$f.name[pic]
     f.path <- f.to.do$f.path[pic]
-    pano_id <- stringr::str_extract(f.name, stringr::regex('(?<=pano\\_id\\:).+(?=.+\\.jpg)'))
+    pano_id <- stringr::str_extract(f.name, stringr::regex('(?<=pano\\_id\\:).+(?=\\.jpg)'))
+    cat(pano_id, '\n')
     type <- stringr::str_extract(f.name, stringr::regex('(?<=\\_)(lag|lead)(?=\\.jpg)'))
     classes <- system(paste0(str.block, f.path), intern=TRUE)
     l.classes <- sapply(classes, function(x) stringr::str_split(x, ' \\(score = '), simplify=TRUE)
@@ -48,5 +49,6 @@ tf_classification <- function(){
     }
   }
   dt.classify <- unique(dt.classify[, .(pano_id, type, fName, category, score)])
+  saveRDS(dt.classify, dt.classify.location)
   return(dt.classify)
 }

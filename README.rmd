@@ -2,7 +2,9 @@
 title: "Deep Learning with Big Data: \\newline Alabama Highway Infrastructure"
 author: "Erik Johnson and Alexander Hainen"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
-output: beamer_presentation
+output: 
+  beamer_presentation:
+    keep_tex: true
 ---
 
 ```{r setup, include=FALSE, echo=FALSE}
@@ -42,13 +44,14 @@ snapshots.location <- paste0(pkg.data.location, 'raw/snapshots/')
 
 # 
 
-```{r, echo=FALSE, eval=TRUE, cache=TRUE, out.width = "300px", }
-knitr::include_graphics(paste0(pkg.data.location, 'raw/training_data/guardrail/22guardrail.jpg'))
+```{r, echo=FALSE, eval=TRUE, cache=TRUE}
+knitr::include_graphics(xtable::sanitize(paste0(path.expand(pkg.data.location), 'raw/training_data/guardrail/22guardrail.jpg'), type='latex'))
 ```
 
 # 
-```{r, echo=FALSE, eval=TRUE, out.width = "300px"}
-knitr::include_graphics(paste0(pkg.data.location, 'raw/training_data/signals/09signals.jpg'))
+
+```{r, echo=FALSE, eval=TRUE}
+knitr::include_graphics(xtable::sanitize(paste0(path.expand(pkg.data.location), 'raw/training_data/signals/09signals.jpg'), type='latex'))
 ```
 
 # What is big data?
@@ -85,13 +88,11 @@ This process will illustrate the following:
 2. How to train and classify images using free and simple algorithms
     * Google Tensorflow
     * Inception v3 algorithm and retraining
-
-# Build Big Data Set 
-
-1.  Start with any freely available road shapefile.
+    
+# Start with any freely available road shapefile.
     * Here, we use Alabama Highway 82 
 
-```{r roads_import, eval=FALSE, cache=TRUE, out.width = "300px"}
+```{r roads_import, eval=TRUE, echo=FALSE, cache=TRUE, out.width = "300px", warning=FALSE}
 if(!(file.exists(roads.clean.location))){
   roads <- rgdal::readOGR(dsn = path.expand(roads.raw.location), layer = 'us82d', verbose = FALSE)
   roads <- sp::spTransform(roads, CRSobj =CRS(proj.env))
@@ -101,19 +102,17 @@ if(!(file.exists(roads.clean.location))){
 }
 # Plot
 map.center <- as.numeric(geosphere::centroid(rgeos::gBuffer(roads, width=0.1)))
-map <- ggmap::get_googlemap(center=c(lon=map.center[1], lat=map.center[2]), zoom=7)
+map <- suppressMessages(ggmap::get_googlemap(center=c(lon=map.center[1], lat=map.center[2]), zoom=8))
 roads_fortify <- ggplot2::fortify(roads)
 p <- ggmap(map)  +
   geom_line(data=roads_fortify, aes(x=long, y=lat, group=group))
-ggsave(p, filename = 'Images/highway.pdf')
+suppressMessages(ggsave(p, filename = 'Images/highway.pdf'))
 knitr::include_graphics('Images/highway.pdf')
 ```
 
-# Discretize roads to points
-
-This discretizes the roads into points creates the points to find the panoids. The goal of the road discretization is solely to build a set of points with which to find the nearest pano_id.
-
+# Find all google streetview snapshots locations
 ```{r road.points, eval=TRUE, echo=FALSE, cache=TRUE}
+# Find location of all google street view camera snapshots
 if (!(file.exists(road.points.location))){
 road.points <- suppressWarnings(sample.line(roads, sdist=0.0075))##
 road.points$long <- road.points@coords[,1]
@@ -122,12 +121,13 @@ saveRDS(road.points, file=road.points.location)
 } else {
   road.points <- readRDS(road.points.location)
 }
-knitr::kable(head(road.points@data))
+#knitr::kable(head(road.points@data))
 ```
+```{r dt_pano_ids, eval=TRUE, echo=FALSE, cache=TRUE}
+# Convert points to panoids and assign camera bearings
 
-# Points to panoids with camera bearings
- 
-```{r dt_pano_ids, eval=TRUE, cache=TRUE}
+# This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we # have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids\\$pano_id_order**.
+
 if (!(file.exists(panoids.location))){
   points.ids.full <- road.points$ID
   points.files <- list.files(road.points.panoid.location)
@@ -187,20 +187,25 @@ if (!(file.exists(panoids.location))){
 } else {
   dt_pano_ids <- readRDS(panoids.location)
 }
-knitr::kable(head(dt_pano_ids[,.(date, pano_id, pano_order=pano_id_order, lat=location.lat, lng=location.lng, bear.lead=bearings.lead, bear.lag=bearings.lag)]))
 ```
 
-This can be automated in the future to adjust the sdist parameter in the road.points chunk to optimally collect all panoids while minimizing the number of repeats samples. This will speed up the meta_data api calls. For now we will just fill in the data data with the `r prettyNum(length(road.points))` road points that we have sampled. Two camera bearings are assigned for each panoid. This is based on aiming the camera at the previous and next pano_id. Order is based on the roads.points file and retained in the field **dt_pano_ids\\$pano_id_order**.
+* A bit of coding, processing, and downloading streetview metadata to aim the cameras, set the zoom levels.
+* There are `r prettyNum(nrow(dt_pano_ids))` camera locations with a rear and forward camerabearing set for each.
+* Here are the first 6.
 
-There are `r nrow(dt_pano_ids)` observations in the **dt_pano_ids** dataset.
+```{r print.table, eval=TRUE, echo=FALSE, cache=TRUE}
+out.table <- head(dt_pano_ids[,.(snap_date=date, pano_id, order=pano_id_order, lat=location.lat, lng=location.lng, bear.lead=bearings.lead, bear.lag=bearings.lag)])
+kable(out.table, 'latex') %>%
+  kable_styling(font_size=6)
+```
 
-# Step 2: Streetview Snapshots
+# Take Google Streetview snapshots
 
-```{r snapshot, eval=FALSE, echo=TRUE, out.width = "50%"}
+```{r snapshot, eval=TRUE, echo=FALSE, cache=TRUE}
 pano_samples <- sample(nrow(dt_pano_ids),size = nrow(dt_pano_ids), replace = FALSE)
 
 for (iSample in pano_samples){
-  if((iSample %% 100)==0) cat(iSample, '\\n')
+  # if((iSample %% 100)==0) cat(iSample, '\\n')
   dt_pano_id <- dt_pano_ids[iSample,]
   
   fDest.lead <- paste0(snapshots.location, 'pano_id:', dt_pano_id$pano_id, '_lead.jpg')
@@ -228,19 +233,23 @@ for (iSample in pano_samples){
 }
 snap.list <- list.files(path = snapshots.location, full.names = TRUE)
 snap.samp <- sample(snap.list, 10)
-knitr::include_graphics(snap.samp[1])
-knitr::include_graphics(snap.samp[2])
 ```
 
+* We then feed the location and variable parameters to the google streetview api and download all `r prettyNum(2*nrow(dt_pano_ids))` pictures.
 
-# Step 3: Human classification to use for machine training
+```{r, echo=FALSE, eval=TRUE, cache=TRUE}
+knitr::include_graphics(xtable::sanitize(paste0(path.expand(pkg.data.location), 'raw/training_data/guardrail/22guardrail.jpg'), type='latex'))
+```
 
+#
 
-# Step 4: Machine Training
+```{r, echo=FALSE, eval=TRUE}
+knitr::include_graphics(xtable::sanitize(paste0(path.expand(pkg.data.location), 'raw/training_data/signals/09signals.jpg'), type='latex'))
+```
 
-Traning data must have unique filenames.
-
-```{r clean_names,eval=FALSE,echo=TRUE}
+# Human Classification of streetview photos
+```{r clean_names,eval=TRUE, echo=FALSE, cache=TRUE}
+#Traning data must have unique filenames.
 training_dirs <- c('guardrail', 'rumble', 'signals')
 for (training_dir in training_dirs){
   filez <- list.files(paste0('~/Dropbox/pkg.data/alabama_roads/raw/training_data/', training_dir), full.names = TRUE)
@@ -250,12 +259,26 @@ for (training_dir in training_dirs){
   })
 }
 ```
+* To start the classification we must teach the machine to recognize different features.
+* Human selects 30-50 photos for each class.
+  1. 30 photos from streetview downloads with guardrails
+  2. 30 photos from streetview downloads with traffic lights
+  3. 30 photos from streetview downloads with rumble strips 
+* Each set of photos is put into its own folder (guardrail, etc.)
 
-Now actually compile and train tensorflow.
+# Training machine to recognize classes
+* We use transfer learning on google's Inception v3 algorithm for this demonstrations
+* Inception v3 is a deep learning machine that takes a long, long, time to build a model
+* We retrain the last step to recognize the guardrails, traffic lights, rumble strips, etc.
 
+Best analogy: Inception v3 is a toddler. We do not want to waste time and resources raising a toddler.
+We just want to teach a toddler to recognize a set of new objects such as a spoon. Show the toddler 30 spoons and they gain the ability to classify spoon objects.
+
+
+# Training Diagnostics
 ```{r, eval=FALSE, echo=FALSE}
 cd ~/tensorflow
-# First build inception for retraining (estimated time ~25 minutes on Linux box)
+# First compile inception for retraining (estimated time ~25 minutes on laptop)
 # Do not need to run this more than once on the box.
 bazel build --config opt tensorflow/examples/image_retraining:retrain
 
@@ -266,16 +289,75 @@ bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir /home/ebjohns
 tensorboard --logdir /tmp/retrain_logs
 ```
 
-# Step 5: Machine Classification
+* Training diagnostics through tensorboard.
+```{r, echo=FALSE, eval=TRUE, out.width = "300px",}
+knitr::include_graphics(xtable::sanitize('Images/tensorTraining.png', type='latex'))
+```
 
-This is the main bottleneck in the process right now.
-This can be parallelized in python using tensorflow/serving [https://github.com/tensorflow/serving](tensorflow serving). For now, this works but takes awhile.
+# Classify all photos
 
-```{r Classification, eval=FALSE, echo=FALSE}
+```{r photo.list, echo=FALSE, cache=TRUE}
+project_location <- '~/Dropbox/pkg.data/alabama_roads/'
+classify.name <- 'roads_example1'
+f.dir <- paste0(project_location, 'raw/snapshots/')
+f.list.path <- list.files(f.dir, full.names = TRUE)
+f.list <- list.files(f.dir)
+```
+
+* The next step is to classify how each of the `r length(f.list)` photos using the trained model.
+* The overall probability of all classes sum to 1 for each photo. 
+
+$$ \sum_{classes} Pr(class_i) = 1$$
+
+```{r Classification, eval=TRUE, echo=FALSE, cache=TRUE}
+# This is the main bottleneck in the process right now.
+# This can be parallelized in python using tensorflow/serving [https://github.com/tensorflow/serving](tensorflow serving). For now, this works but takes awhile.
 tf_classify <- tf_classification()
 ```
 
-```{r, eval=FALSE, echo=TRUE}
+# Classification: Rumble Strips only
+
+```{r, echo=FALSE, eval=TRUE, out.width = "200px",fig.align='center'}
+f.name <- 'pano_id:zZ39CumiCqaxS9-1n6erDg_lead.jpg'
+f.path <- paste0(path.expand('~/Dropbox/pkg.data/alabama_roads/raw/snapshots/'), f.name)
+knitr::include_graphics(f.path)
+```
+
+```{r, echo=FALSE, eval=TRUE}
+out.table <- tf_classify[fName==f.name, .(fName, category, score)]
+kable(out.table, 'latex') %>%
+  kable_styling(font_size=6)
+```
+
+# Classification: Traffic Signal only
+
+```{r, echo=FALSE, eval=TRUE, out.width = "200px",fig.align='center'}
+f.name <- 'pano_id:-km7JQTMeLsO9k7uF_cnsg_lag.jpg'
+f.path <- paste0(path.expand('~/Dropbox/pkg.data/alabama_roads/raw/snapshots/'), f.name)
+knitr::include_graphics(f.path)
+```
+
+```{r, echo=FALSE, eval=TRUE}
+out.table <- tf_classify[fName==f.name, .(fName, category, score)]
+kable(out.table, 'latex') %>%
+  kable_styling(font_size=6)
+```
+
+# Classification: Rumble Strips and Guardrail
+
+```{r, echo=FALSE, eval=TRUE, out.width = "200px",fig.align='center'}
+f.name <- 'pano_id:zZq1fNpgOGCGAWylAjnidw_lag.jpg'
+f.path <- paste0(path.expand('~/Dropbox/pkg.data/alabama_roads/raw/snapshots/'), f.name)
+knitr::include_graphics(f.path)
+```
+
+```{r, echo=FALSE, eval=TRUE}
+out.table <- tf_classify[fName==f.name, .(fName, category, score)]
+kable(out.table, 'latex') %>%
+  kable_styling(font_size=6)
+```
+
+```{r, eval=FALSE, echo=FALSE}
 # Guardrail example
 #bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:r2NkANifYabJWFCEi2CXUQ_lag.jpg
 
@@ -291,12 +373,12 @@ tf_classify <- tf_classification()
 #bazel-bin/tensorflow/examples/image_retraining/label_image --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt --output_layer=final_result:0 --image=$HOME/Dropbox/pkg.data/alabama_roads/raw/snapshots/pano_id:QZkFVmowjPq0ztNwXXOhdg_lag.jpg
 ```
 
-# Step 6: Output visualization 
+# Results:
 
+Classified images from this example project can be used in a variety of ways:
 
-This is where the QGis component goes.
-
-
+1. Highway infrastructure inventory accounting.
+2. Interactive mapping.
 
 
 
